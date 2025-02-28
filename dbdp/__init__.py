@@ -1,6 +1,7 @@
-from .dbdp import *
 from .fnn import *
 from .scheme import *
 from .sde import *
 
-__all__ = ["SDE", "EulerScheme", "FNN", "DBDP1"]
+from .models import *
+
+__all__ = ["SDE", "EulerScheme", "FNN", "DBDP1", "DBDP1Cell"]
