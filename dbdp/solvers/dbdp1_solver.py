@@ -1,4 +1,4 @@
-from ..fnn import FNN
+from ..networks.dbdp1_network import DBDP1CellNetwork
 
 import torch
 import torch.nn as nn
@@ -12,49 +12,8 @@ from tqdm import tqdm
 from typing import Callable
 
 
-class DBDP1Cell(nn.Module):
-    """Represents a single time-step cell in the deep backward dynamic programming scheme."""
-
-    def __init__(self, f: Callable, dt: float, dim: int):
-        """
-        Parameters
-        ----------
-        f : Callable
-            A function f(t, x, u, z) defining the non-linearity in the PDE.
-        dt : float
-            The time increment used in the Euler update.
-        dim : int
-            The dimension of the state space.
-        """
-        super().__init__()
-
-        self._f = f
-        self._dt = dt
-        self._dim = dim
-
-        self._u_approximate = FNN(dim, 1, 2, dim + 10)
-        self._z_approximate = FNN(dim, dim, 2, dim + 10)
-
-    def forward(self, t: float, x: torch.Tensor, dw: torch.Tensor) -> torch.Tensor:
-        y = self._u_approximate(x)
-        z = self._z_approximate(x)
-        return y - self._f(t, x, y, z) * self._dt + torch.matmul(z.transpose(-2, -1), dw)
-
-    @property
-    def dim(self) -> int:
-        return self._dim
-
-    @property
-    def u_approximate(self) -> Callable:
-        return self._u_approximate
-
-    @property
-    def z_approximate(self) -> Callable:
-        return self._z_approximate
-
-
-class DBDP1:
-    """Deep Backward Dynamic Programming scheme 1."""
+class DBDP1Solver:
+    """PDE solver using Deep Backward Dynamic Programming scheme 1"""
 
     def __init__(self, f: Callable, g: Callable, maturity: float, time_steps: int, dim: int):
         """
@@ -67,17 +26,18 @@ class DBDP1:
         maturity : float
             The terminal time T.
         time_steps : int
-            The number of time steps used to discretize the interval [0, T].
+            The number of time steps used to discretize the interval [0,T].
         dim : int
             The dimension of the state space.
         """
         self._time_steps = time_steps
+        self._maturity = maturity
         self._dt = maturity / time_steps
         self._dim = dim
         self._f = f
         self._g = g
 
-        self._dbdp_cells = [DBDP1Cell(f, self._dt, dim) for _ in range(time_steps)]
+        self._dbdp_networks = [DBDP1CellNetwork(f, self._dt, dim) for _ in range(time_steps)]
 
     @torch.no_grad()
     def __call__(self, t: float, x: torch.Tensor) -> torch.Tensor:
@@ -104,10 +64,10 @@ class DBDP1:
         if time_idx == self._time_steps:
             return self._g(x)
 
-        dbdp_cell = self._dbdp_cells[time_idx]
-        dbdp_cell.eval()
+        network = self._dbdp_networks[time_idx]
+        network.eval()
 
-        u = dbdp_cell.u_approximate(x)
+        u = network.u_network(x)
         return u
 
     def train(
@@ -154,7 +114,7 @@ class DBDP1:
             # which are too far away from the true solution. Besides the number of gradient iterations
             # to achieve is rather small after the first resolution step.
             if time_idx < self._time_steps - 1:
-                self._dbdp_cells[time_idx].load_state_dict(self._dbdp_cells[time_idx + 1].state_dict())
+                self._dbdp_networks[time_idx].load_state_dict(self._dbdp_networks[time_idx + 1].state_dict())
 
             # Training one time step
             train_losses, test_losses = self._train_time_step(time_idx, datas, dw, num_epochs, batch_size, lr)
@@ -199,29 +159,28 @@ class DBDP1:
         ------
         ValueError
             - If datas is not a 3D tensor.
-
             - If the dimension of the scheme does not match the last dimension of datas.
         """
         if datas.dim() != 3:
             raise ValueError(f"datas must be a 3D tensor, but got dimension {datas.dim()}.")
-
         if datas.shape[2] != self._dim:
             raise ValueError(f"Mismatch in state dimension: expected {self._dim}, got {datas.shape[2]}.")
 
-        model = self._dbdp_cells[time_idx]
-        optimizer = Adam(model.parameters(), lr=lr)
+        network = self._dbdp_networks[time_idx]
+        optimizer = Adam(network.parameters(), lr=lr)
         criterion = nn.MSELoss()
 
         train_loader, test_loader = self._create_data_loaders(time_idx, datas, dw, batch_size)
-        train_losses = np.zeros(num_epochs)
-        test_losses = np.zeros(num_epochs)
+        train_losses = np.empty(num_epochs)
+        test_losses = np.empty(num_epochs)
 
         for epoch in range(num_epochs):
-            model.train()
+            # Training
+            network.train()
             running_train_loss = 0.0
             for x_batch, y_batch, dw_batch in train_loader:
                 optimizer.zero_grad()
-                pred = model(time_idx, x_batch, dw_batch)
+                pred = network(time_idx, x_batch, dw_batch)
                 loss = criterion(pred, y_batch)
                 loss.backward()
                 optimizer.step()
@@ -231,11 +190,12 @@ class DBDP1:
             train_loss = running_train_loss / len(train_loader.dataset)
             train_losses[epoch] = train_loss
 
-            model.eval()
+            # Testing
+            network.eval()
             running_test_loss = 0.0
             with torch.no_grad():
                 for x_batch, y_batch, dw_batch in test_loader:
-                    pred = model(time_idx, x_batch, dw_batch)
+                    pred = network(time_idx, x_batch, dw_batch)
                     loss = criterion(pred, y_batch)
 
                     running_test_loss += loss.item() * x_batch.size(0)
@@ -245,7 +205,6 @@ class DBDP1:
 
         return train_losses, test_losses
 
-    @torch.no_grad()
     def _create_data_loaders(
         self,
         time_idx: int,
@@ -254,7 +213,7 @@ class DBDP1:
         batch_size: int,
     ) -> tuple[DataLoader, DataLoader]:
         """
-        Create training and testing DataLoaders for a given time step. Uses an 80-20% train-test split.
+        Create training and testing DataLoaders for a given time step.
 
         Parameters
         ----------
@@ -278,9 +237,10 @@ class DBDP1:
         x_train = datas[:train_size, time_idx]
         x_test = datas[train_size:, time_idx]
 
-        u_next = self._g if time_idx == self._time_steps - 1 else self._dbdp_cells[time_idx + 1].u_approximate
-        y_train = u_next(datas[:train_size, time_idx + 1])
-        y_test = u_next(datas[train_size:, time_idx + 1])
+        u_next = self._g if time_idx == self._time_steps - 1 else self._dbdp_networks[time_idx + 1].u_network
+        with torch.no_grad():
+            y_train = u_next(datas[:train_size, time_idx + 1])
+            y_test = u_next(datas[train_size:, time_idx + 1])
 
         dw_train = dw[:train_size, time_idx]
         dw_test = dw[train_size:, time_idx]
@@ -303,8 +263,8 @@ class DBDP1:
             The file path to save the checkpoint.
         """
         checkpoint = {}
-        for i, dbdp_cell in enumerate(self._dbdp_cells):
-            checkpoint[f"cell_{i}"] = dbdp_cell.state_dict()
+        for i, network in enumerate(self._dbdp_networks):
+            checkpoint[f"network_{i}"] = network.state_dict()
 
         torch.save(checkpoint, filepath)
         print(f"Model saved to {filepath}")
@@ -319,7 +279,7 @@ class DBDP1:
             The file path from which to load the checkpoint.
         """
         checkpoint = torch.load(filepath, weights_only=True)
-        for i, dbdp_cell in enumerate(self._dbdp_cells):
-            dbdp_cell.load_state_dict(checkpoint[f"cell_{i}"])
+        for i, network in enumerate(self._dbdp_networks):
+            network.load_state_dict(checkpoint[f"network_{i}"])
 
         print(f"Model loaded from {filepath}")

@@ -8,7 +8,11 @@ def main() -> None:
         packages=find_packages(),
         # author="",
         description="",
-        install_requires=["torch", "numpy", "tqdm"],
+        install_requires=[
+            "torch",
+            "numpy",
+            "tqdm",
+        ],
     )
 
 
