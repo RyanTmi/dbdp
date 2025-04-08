@@ -77,6 +77,7 @@ class DBDP1Solver:
         num_epochs: int,
         batch_size: int,
         lr: float = 1e-3,
+        step: int = -1,  # For debug purposes
     ) -> tuple[np.ndarray, np.ndarray]:
         """
         Train the DBDP scheme using the provided data and Brownian increments.
@@ -120,6 +121,10 @@ class DBDP1Solver:
             train_losses, test_losses = self._train_time_step(time_idx, datas, dw, num_epochs, batch_size, lr)
             trains_losses[i] = train_losses
             tests_losses[i] = test_losses
+
+            # For debug purposes
+            if step - 1 == i:
+                break
 
         return trains_losses, tests_losses
 
