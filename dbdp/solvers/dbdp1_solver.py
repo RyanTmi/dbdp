@@ -1,4 +1,5 @@
-from ..networks.dbdp1_network import DBDP1CellNetwork
+from ..networks.dbdp1_network import DBDP1NetworkElement
+from ..models import DBDPModel
 
 import torch
 import torch.nn as nn
@@ -9,18 +10,16 @@ import numpy as np
 
 from tqdm import tqdm
 
-from typing import Callable
-
 
 class DBDP1Solver:
     """PDE solver using Deep Backward Dynamic Programming scheme 1"""
 
-    def __init__(self, f: Callable, g: Callable, maturity: float, time_steps: int, dim: int):
+    def __init__(self, model: DBDPModel, maturity: float, time_steps: int, dim: int):
         """
         Parameters
         ----------
         f : Callable
-            The function f(t, x, u, z) defining the dynamics of the PDE.
+            The function f(t,x,u,z) defining the dynamics of the PDE.
         g : Callable
             The terminal condition function, u(T,x) = g(x).
         maturity : float
@@ -34,10 +33,9 @@ class DBDP1Solver:
         self._maturity = maturity
         self._dt = maturity / time_steps
         self._dim = dim
-        self._f = f
-        self._g = g
+        self._model = model
 
-        self._dbdp_networks = [DBDP1CellNetwork(f, self._dt, dim) for _ in range(time_steps)]
+        self._dbdp_network = [DBDP1NetworkElement(model, self._dt, dim) for _ in range(time_steps)]
 
     @torch.no_grad()
     def __call__(self, t: float, x: torch.Tensor) -> torch.Tensor:
@@ -59,15 +57,16 @@ class DBDP1Solver:
         torch.Tensor
             The approximated solution u(t,x).
         """
+        # TODO: Do linear interpolation instead
         time_idx = int(round(t / self._dt))
 
         if time_idx == self._time_steps:
-            return self._g(x)
+            return self._model.g(x)
 
-        network = self._dbdp_networks[time_idx]
-        network.eval()
+        network_elt = self._dbdp_network[time_idx]
+        network_elt.eval()
 
-        u = network.u_network(x)
+        u = network_elt.u_network(x)
         return u
 
     def train(
@@ -107,6 +106,7 @@ class DBDP1Solver:
         trains_losses = np.zeros((self._time_steps, num_epochs))
         tests_losses = np.zeros((self._time_steps, num_epochs))
 
+        # Reverse loop for backward training.
         for i, time_idx in enumerate(tqdm(range(self._time_steps - 1, -1, -1), desc="Training")):
             # HACK: We initialize the weights and bias of the neural network to the weights and bias
             # of the previous time step treated: this trick is commonly used in iterative solvers of PDE,
@@ -114,7 +114,7 @@ class DBDP1Solver:
             # which are too far away from the true solution. Besides the number of gradient iterations
             # to achieve is rather small after the first resolution step.
             if time_idx < self._time_steps - 1:
-                self._dbdp_networks[time_idx].load_state_dict(self._dbdp_networks[time_idx + 1].state_dict())
+                self._dbdp_network[time_idx].load_state_dict(self._dbdp_network[time_idx + 1].state_dict())
 
             # Training one time step
             train_losses, test_losses = self._train_time_step(time_idx, datas, dw, num_epochs, batch_size, lr)
@@ -133,7 +133,7 @@ class DBDP1Solver:
         lr: float,
     ) -> tuple[np.ndarray, np.ndarray]:
         """
-        Train the DBDP cell at a specific time step.
+        Train at a specific time step.
 
         Parameters
         ----------
@@ -166,8 +166,8 @@ class DBDP1Solver:
         if datas.shape[2] != self._dim:
             raise ValueError(f"Mismatch in state dimension: expected {self._dim}, got {datas.shape[2]}.")
 
-        network = self._dbdp_networks[time_idx]
-        optimizer = Adam(network.parameters(), lr=lr)
+        network_elt = self._dbdp_network[time_idx]
+        optimizer = Adam(network_elt.parameters(), lr=lr)
         criterion = nn.MSELoss()
 
         train_loader, test_loader = self._create_data_loaders(time_idx, datas, dw, batch_size)
@@ -176,11 +176,11 @@ class DBDP1Solver:
 
         for epoch in range(num_epochs):
             # Training
-            network.train()
+            network_elt.train()
             running_train_loss = 0.0
             for x_batch, y_batch, dw_batch in train_loader:
                 optimizer.zero_grad()
-                pred = network(time_idx, x_batch, dw_batch)
+                pred = network_elt(time_idx, x_batch, dw_batch)
                 loss = criterion(pred, y_batch)
                 loss.backward()
                 optimizer.step()
@@ -191,11 +191,11 @@ class DBDP1Solver:
             train_losses[epoch] = train_loss
 
             # Testing
-            network.eval()
+            network_elt.eval()
             running_test_loss = 0.0
             with torch.no_grad():
                 for x_batch, y_batch, dw_batch in test_loader:
-                    pred = network(time_idx, x_batch, dw_batch)
+                    pred = network_elt(time_idx, x_batch, dw_batch)
                     loss = criterion(pred, y_batch)
 
                     running_test_loss += loss.item() * x_batch.size(0)
@@ -237,7 +237,7 @@ class DBDP1Solver:
         x_train = datas[:train_size, time_idx]
         x_test = datas[train_size:, time_idx]
 
-        u_next = self._g if time_idx == self._time_steps - 1 else self._dbdp_networks[time_idx + 1].u_network
+        u_next = self._model.g if time_idx == self._time_steps - 1 else self._dbdp_network[time_idx + 1].u_network
         with torch.no_grad():
             y_train = u_next(datas[:train_size, time_idx + 1])
             y_test = u_next(datas[train_size:, time_idx + 1])
@@ -263,8 +263,8 @@ class DBDP1Solver:
             The file path to save the checkpoint.
         """
         checkpoint = {}
-        for i, network in enumerate(self._dbdp_networks):
-            checkpoint[f"network_{i}"] = network.state_dict()
+        for i, network_elt in enumerate(self._dbdp_network):
+            checkpoint[f"network_elt_{i}"] = network_elt.state_dict()
 
         torch.save(checkpoint, filepath)
         print(f"Model saved to {filepath}")
@@ -279,7 +279,7 @@ class DBDP1Solver:
             The file path from which to load the checkpoint.
         """
         checkpoint = torch.load(filepath, weights_only=True)
-        for i, network in enumerate(self._dbdp_networks):
-            network.load_state_dict(checkpoint[f"network_{i}"])
+        for i, network_elt in enumerate(self._dbdp_network):
+            network_elt.load_state_dict(checkpoint[f"network_elt_{i}"])
 
         print(f"Model loaded from {filepath}")

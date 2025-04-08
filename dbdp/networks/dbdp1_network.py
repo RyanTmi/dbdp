@@ -1,4 +1,5 @@
 from .fnn import FNN
+from ..models import DBDPModel
 
 import torch
 import torch.nn as nn
@@ -6,15 +7,15 @@ import torch.nn as nn
 from typing import Callable
 
 
-class DBDP1CellNetwork(nn.Module):
-    """Represents a single time-step cell in the deep backward dynamic programming scheme."""
+class DBDP1NetworkElement(nn.Module):
+    """Represents a single time-step element in the deep backward dynamic programming scheme."""
 
-    def __init__(self, f: Callable, dt: float, dim: int):
+    def __init__(self, model: DBDPModel, dt: float, dim: int):
         """
         Parameters
         ----------
         f : Callable
-            A function f(t, x, u, z) defining the non-linearity in the PDE.
+            A function f(t,x,u,z) defining the non-linearity in the PDE.
         dt : float
             The time increment used in the Euler update.
         dim : int
@@ -22,7 +23,7 @@ class DBDP1CellNetwork(nn.Module):
         """
         super().__init__()
 
-        self._f = f
+        self._model = model
         self._dt = dt
         self._dim = dim
 
@@ -42,7 +43,7 @@ class DBDP1CellNetwork(nn.Module):
     def forward(self, t: float, x: torch.Tensor, dw: torch.Tensor) -> torch.Tensor:
         y = self._u_network(x)
         z = self._z_network(x)
-        return y - self._f(t, x, y, z) * self._dt + torch.matmul(z.transpose(-2, -1), dw)
+        return y - self._model.f(t, x, y, z) * self._dt + torch.matmul(torch.transpose(z, -2, -1), dw)
 
     @property
     def dim(self) -> int:
