@@ -35,7 +35,7 @@ class FNN(nn.Module):
         super().__init__()
 
         self._input_layer = nn.Linear(input_dim, hidden_dim)
-        self._hidden_layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(num_hidden)])
+        self._hidden_layers = nn.ModuleList([nn.Linear(hidden_dim, hidden_dim) for _ in range(num_hidden - 1)])
         self._output_layer = nn.Linear(hidden_dim, output_dim)
         self._activation = activation
 
