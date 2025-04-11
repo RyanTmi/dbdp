@@ -1,8 +1,5 @@
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
-
-from typing import Callable
 
 
 class FNN(nn.Module):
@@ -16,7 +13,7 @@ class FNN(nn.Module):
         output_dim: int,
         num_hidden: int,
         hidden_dim: int,
-        activation: Callable = F.tanh,
+        activation: nn.Module = nn.Tanh(),
     ):
         """
         Parameters
