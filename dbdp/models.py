@@ -1,30 +1,45 @@
 import numpy as np
 import torch
+import torch.nn as nn
 
 from typing import Protocol
 
 
-class DBDPModel(Protocol):
-    def drift(self, t: float, x: torch.Tensor) -> torch.Tensor: ...
-
-    def diffusion(self, t: float, x: torch.Tensor) -> torch.Tensor: ...
-
-    def f(self, t: float, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor) -> torch.Tensor: ...
-
+class DBDPModelDynamic(Protocol):
+    def drift(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor: ...
+    def diffusion(self, t: torch.Tensor, x: torch.Tensor) -> torch.Tensor: ...
+    def f(self, t: torch.Tensor, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor) -> torch.Tensor: ...
     def g(self, x: torch.Tensor) -> torch.Tensor: ...
+
+    @property
+    def dim(self) -> int: ...
+
+
+class DBDPModel(nn.Module, DBDPModelDynamic):
+    def __init__(self):
+        super().__init__()
+
+    def make_buffer(self, data: float | torch.Tensor) -> nn.Buffer:
+        if isinstance(data, float):
+            data = torch.tensor(data)
+        return nn.Buffer(data, persistent=False)
 
     def generate_datas(
         self,
         x: torch.Tensor,
         dt: float,
         time_steps: int,
-        dim: int,
         sample_count: int,
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        dw = np.sqrt(dt) * torch.randn((sample_count, time_steps, dim))
+        if x.dim() != 1:
+            raise ValueError(f"x should have dimension 1, but got {x.dim()} instead.")
+
+        dw = np.sqrt(dt) * torch.randn((sample_count, time_steps, x.size(0)))
         x_paths = self._build_path(x, dt, dw)
         return x_paths, dw
 
+    # TODO: Work only for 1d PDEs. Make this function work with d-dimensional PDEs.
+    # Maybe do theses computations on GPU ?
     def _build_path(self, x: torch.Tensor, dt: float, dw: torch.Tensor) -> torch.Tensor:
         """
         Build a simulated path for the SDE using the Euler-Maruyama scheme.
@@ -42,22 +57,7 @@ class DBDPModel(Protocol):
         -------
         torch.Tensor
             A tensor of simulated SDE paths with shape (n, num_steps + 1, d).
-
-        Raises
-        ------
-        ValueError
-            - If x is not a 1D tensor.
-            - If dw is not a 3D tensor.
-            - If the dimension of x does not match the last dimension of dw.
         """
-        if x.dim() != 1:
-            raise ValueError(f"x should have dimension 1, but got {x.dim()} instead.")
-        if dw.dim() != 3:
-            raise ValueError(f"dw should have dimension 3, but got {dw.dim()} instead.")
-        if x.shape[0] != dw.shape[2]:
-            raise ValueError(
-                f"Mismatch in dimension: x has shape {x.shape[0]} but dw's last dimension is {dw.shape[2]}."
-            )
 
         paths = torch.zeros((dw.shape[0], dw.shape[1] + 1, dw.shape[2]))
         paths[:, 0] = x
