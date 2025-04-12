@@ -58,7 +58,7 @@ class DBDPModel(nn.Module, DBDPModelDynamic):
         torch.Tensor
             A tensor of simulated SDE paths with shape (n, num_steps + 1, d).
         """
-
+        dt = torch.tensor(dt)
         paths = torch.zeros((dw.shape[0], dw.shape[1] + 1, dw.shape[2]))
         paths[:, 0] = x
 
