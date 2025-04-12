@@ -1,4 +1,5 @@
-from .fnn import FNN
+from .feed_forward import FeedForward
+from ..models import DBDPModelDynamic
 
 import torch
 import torch.nn as nn

@@ -29,7 +29,7 @@ class DBDP1Solver:
         self._time_steps = time_steps
         self._dt = torch.tensor(dt)
 
-        self._network = [DBDP1NetworkElement(model, self._dt) for _ in range(time_steps)]
+        self._network = [DBDP1NetworkElement(model) for _ in range(time_steps)]
 
     @torch.no_grad()
     def __call__(self, t: float, x: torch.Tensor) -> torch.Tensor:
@@ -116,7 +116,6 @@ class DBDP1Solver:
         self._dt = self._dt.to(device)
         for network_elt in self._network:
             network_elt.to(device)
-            network_elt.dt = self._dt
 
         # Reverse loop for backward training.
         for time_idx in tqdm(range(self._time_steps - 1, -1, -1), desc="Training"):
@@ -141,6 +140,9 @@ class DBDP1Solver:
             trains_losses[time_idx] = train_losses
             tests_losses[time_idx] = test_losses
 
+            # Decrease the learning rate
+            lr = max(1e-4, lr * 3 / 4)
+
             # NOTE: For debug purposes, train only `step` time steps
             if step == self._time_steps - time_idx:
                 break
@@ -149,7 +151,6 @@ class DBDP1Solver:
         self._dt = self._dt.cpu()
         for network_elt in self._network:
             network_elt.cpu()
-            network_elt.dt = self._dt
 
         return trains_losses, tests_losses
 
@@ -211,7 +212,7 @@ class DBDP1Solver:
             running_train_loss = 0.0
             for x_batch, y_batch, dw_batch in train_loader:
                 optimizer.zero_grad()
-                pred = network_elt(t, x_batch, dw_batch)
+                pred = network_elt(t, x_batch, self._dt, dw_batch)
                 loss = criterion(pred, y_batch)
                 loss.backward()
                 optimizer.step()
@@ -226,7 +227,7 @@ class DBDP1Solver:
             running_test_loss = 0.0
             with torch.no_grad():
                 for x_batch, y_batch, dw_batch in test_loader:
-                    pred = network_elt(t, x_batch, dw_batch)
+                    pred = network_elt(t, x_batch, self._dt, dw_batch)
                     loss = criterion(pred, y_batch)
 
                     running_test_loss += loss.item() * x_batch.size(0)
