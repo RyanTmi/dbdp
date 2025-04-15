@@ -32,6 +32,8 @@ class DBDPModel(nn.Module, DBDPModelDynamic):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if x.dim() != 1:
             raise ValueError(f"x should have dimension 1, but got {x.dim()} instead.")
+        if x.size(0) != self.dim:
+            raise ValueError(f"x should have size {self.dim}, but got {x.size(0)} instead.")
 
         dt = torch.tensor(dt)
         dw = torch.sqrt(dt) * torch.randn((sample_count, time_steps, x.size(0)))
