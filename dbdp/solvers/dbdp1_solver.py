@@ -29,7 +29,7 @@ class DBDP1Solver:
         self._time_steps = time_steps
         self._dt = torch.tensor(dt)
 
-        self._network = [DBDP1NetworkElement(model) for _ in range(time_steps)]
+        self._network = nn.ModuleList([DBDP1NetworkElement(model) for _ in range(time_steps)])
 
     @torch.no_grad()
     def __call__(self, t: float, x: torch.Tensor) -> torch.Tensor:
@@ -114,8 +114,7 @@ class DBDP1Solver:
         # in every network stored in `self._network`.
         # Network elements (parameters) are moved to the target device.
         self._dt = self._dt.to(device)
-        for network_elt in self._network:
-            network_elt.to(device)
+        self._network.to(device)
 
         # Reverse loop for backward training.
         for time_idx in tqdm(range(self._time_steps - 1, -1, -1), desc="Training"):
@@ -149,8 +148,7 @@ class DBDP1Solver:
 
         # Move the networks back to CPU
         self._dt = self._dt.cpu()
-        for network_elt in self._network:
-            network_elt.cpu()
+        self._network.cpu()
 
         return trains_losses, tests_losses
 

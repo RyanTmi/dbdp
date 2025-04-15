@@ -1,4 +1,3 @@
-import numpy as np
 import torch
 import torch.nn as nn
 
@@ -20,7 +19,7 @@ class DBDPModel(nn.Module, DBDPModelDynamic):
         super().__init__()
 
     def make_buffer(self, data: float | torch.Tensor) -> nn.Buffer:
-        if isinstance(data, float):
+        if isinstance(data, (float, int)):
             data = torch.tensor(data)
         return nn.Buffer(data, persistent=False)
 
@@ -34,13 +33,12 @@ class DBDPModel(nn.Module, DBDPModelDynamic):
         if x.dim() != 1:
             raise ValueError(f"x should have dimension 1, but got {x.dim()} instead.")
 
-        dw = np.sqrt(dt) * torch.randn((sample_count, time_steps, x.size(0)))
+        dt = torch.tensor(dt)
+        dw = torch.sqrt(dt) * torch.randn((sample_count, time_steps, x.size(0)))
         x_paths = self._build_path(x, dt, dw)
         return x_paths, dw
 
-    # TODO: Work only for 1d PDEs. Make this function work with d-dimensional PDEs.
-    # Maybe do theses computations on GPU ?
-    def _build_path(self, x: torch.Tensor, dt: float, dw: torch.Tensor) -> torch.Tensor:
+    def _build_path(self, x: torch.Tensor, dt: torch.Tensor, dw: torch.Tensor) -> torch.Tensor:
         """
         Build a simulated path for the SDE using the Euler-Maruyama scheme.
 
@@ -48,23 +46,24 @@ class DBDPModel(nn.Module, DBDPModelDynamic):
         ----------
         x : torch.Tensor
             A 1D tensor representing the initial state of the SDE (of shape (d,)).
-        dt : float
+        dt : torch.Tensor
             The time increment for each Euler step.
         dw : torch.Tensor
-            A 3D tensor containing the Brownian increments with shape (n, num_steps, d).
+            A 3D tensor containing the Brownian increments with shape (n, n_steps, d).
 
         Returns
         -------
         torch.Tensor
-            A tensor of simulated SDE paths with shape (n, num_steps + 1, d).
+            A tensor of simulated SDE paths with shape (n, n_steps + 1, d).
         """
-        dt = torch.tensor(dt)
-        paths = torch.zeros((dw.shape[0], dw.shape[1] + 1, dw.shape[2]))
+        n, n_steps, d = dw.shape
+
+        paths = torch.zeros((n, n_steps + 1, d))
         paths[:, 0] = x
 
-        for i in range(dw.shape[1]):
+        for i in range(n_steps):
             drift = self.drift(i * dt, paths[:, i])
             diffusion = self.diffusion(i * dt, paths[:, i])
-            paths[:, i + 1] = paths[:, i] + drift * dt + diffusion * dw[:, i]
+            paths[:, i + 1] = paths[:, i] + drift * dt + torch.matmul(dw[:, i], diffusion.mT)
 
         return paths
