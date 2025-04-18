@@ -84,7 +84,7 @@ class DBDPSolver:
         datas: torch.Tensor,
         dw: torch.Tensor,
         *,
-        n_epochs: int,
+        num_epochs: int,
         batch_size: int,
         lr: float = 1e-2,
         device: torch.device = torch.device("cpu"),
@@ -103,7 +103,7 @@ class DBDPSolver:
             The tensor of state paths.
         dw : torch.Tensor
             The tensor of Brownian increments.
-        n_epochs : int
+        num_epochs : int
             The number of epochs to train each time step.
         batch_size : int
             The batch size for the DataLoader.
@@ -117,8 +117,8 @@ class DBDPSolver:
         tuple[np.ndarray, np.ndarray]
             A tuple containing two arrays: the training losses and the testing losses
         """
-        trains_losses = np.empty((self._time_steps, n_epochs))
-        tests_losses = np.empty((self._time_steps, n_epochs))
+        trains_losses = np.zeros((self._time_steps, num_epochs))
+        tests_losses = np.zeros((self._time_steps, num_epochs))
 
         # Theses are small enough to fit in GPU's memory, so we can move them to the target device.
         datas = datas.to(device)
@@ -144,7 +144,7 @@ class DBDPSolver:
                 times[time_idx],
                 datas,
                 dw,
-                n_epochs,
+                num_epochs,
                 batch_size,
                 lr,
             )
@@ -152,7 +152,7 @@ class DBDPSolver:
             tests_losses[time_idx] = test_losses
 
             # Decrease the learning rate
-            lr = max(1e-4, lr * 3 / 4)
+            lr = max(1e-5, lr * 3 / 4)
 
             # NOTE: For debug purposes, train only `step` time steps
             if step == self._time_steps - time_idx:
@@ -169,7 +169,7 @@ class DBDPSolver:
         t: torch.Tensor,
         datas: torch.Tensor,
         dw: torch.Tensor,
-        n_epochs: int,
+        num_epochs: int,
         batch_size: int,
         lr: float,
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -184,7 +184,7 @@ class DBDPSolver:
             The tensor of state paths.
         dw : torch.Tensor
             The tensor of Brownian increments.
-        n_epochs : int
+        num_epochs : int
             The number of training epochs for this time step.
         batch_size : int
             The batch size for the DataLoader.
@@ -212,10 +212,10 @@ class DBDPSolver:
         criterion = nn.MSELoss()
 
         train_loader, test_loader = self._create_data_loaders(time_idx, datas, dw, batch_size)
-        train_losses = np.empty(n_epochs)
-        test_losses = np.empty(n_epochs)
+        train_losses = np.zeros(num_epochs)
+        test_losses = np.zeros(num_epochs)
 
-        for epoch in range(n_epochs):
+        for epoch in range(num_epochs):
             # Training
             network_elt.train()
             running_train_loss = 0.0
