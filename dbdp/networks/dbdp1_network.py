@@ -38,7 +38,7 @@ class DBDP1NetworkElement(nn.Module):
     def forward(self, t: torch.Tensor, x: torch.Tensor, dt: torch.Tensor, dw: torch.Tensor) -> torch.Tensor:
         y = self._u_network(x)
         z = self._z_network(x)
-        return y - self._model.f(t, x, y, z) * dt + torch.matmul(z.mT, dw)
+        return y - self._model.f(t, x, y, z) * dt + torch.einsum("ij,ij->i", z, dw).unsqueeze(1)
 
     @property
     def u_network(self) -> Callable:
