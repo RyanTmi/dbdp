@@ -128,9 +128,6 @@ class DBDPSolver:
             else:
                 n_epochs = n_epochs_1
 
-            if time_idx == 0:
-                break
-
             # Training one time step
             train_losses, test_losses = self._train_time_step(
                 time_idx,
