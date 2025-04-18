@@ -8,7 +8,6 @@ from torch.optim import Adam
 from torch.utils.data import DataLoader, TensorDataset
 
 from tqdm import tqdm
-import math
 
 
 class DBDPSolver:
@@ -38,7 +37,7 @@ class DBDPSolver:
         """
         Inference method for the DBDP scheme.
 
-        For a given time t and state x, the corresponding u approximation using linear interpolation is returned.
+        For a given time t and state x, the corresponding u approximation is returned.
         If t is the terminal time, the terminal condition g(x) is used.
 
         Parameters
@@ -53,40 +52,26 @@ class DBDPSolver:
         torch.Tensor
             The approximated solution u(t,x).
         """
-        dt = self._dt.item()
-        n = self._time_steps
+        time_idx = int(round(t / self._dt.item()))
 
-        i_lower = int(math.floor(t / dt))
-        if i_lower >= n:
+        if time_idx == self._time_steps:
             return self._model.g(x)
 
-        t_lower = i_lower * dt
-        lbd = (t - t_lower) / dt
+        network_elt = self._network[time_idx]
+        network_elt.eval()
 
-        if lbd == 0.0:
-            # Exactly on a grid point
-            net = self._network[i_lower]
-            net.eval()
-            return net.u_network(x)
-        else:
-            # Interpolate between i_lower and i_lower + 1
-            net0 = self._network[i_lower]
-            net1 = self._network[i_lower + 1]
-            net0.eval()
-            net1.eval()
-
-            u0 = net0.u_network(x)
-            u1 = net1.u_network(x)
-            return (1.0 - lbd) * u0 + lbd * u1
+        u = network_elt.u_network(x)
+        return u
 
     def train(
         self,
         datas: torch.Tensor,
         dw: torch.Tensor,
         *,
-        num_epochs: int,
-        batch_size: int,
-        lr: float = 1e-2,
+        n_epochs_1: int = 5_000,
+        n_epochs_2: int = 200,
+        batch_size: int = 1_000,
+        lr: float = 1e-4,
         device: torch.device = torch.device("cpu"),
         step: int = -1,  # For debug purposes
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -103,12 +88,14 @@ class DBDPSolver:
             The tensor of state paths.
         dw : torch.Tensor
             The tensor of Brownian increments.
-        num_epochs : int
-            The number of epochs to train each time step.
-        batch_size : int
+        n_epochs_1 : int, default=1_000
+            The number of epochs to train the first time step.
+        n_epochs_2 : int, default=400
+            The number of epochs to train the other time step.
+        batch_size : int, default=1_000
             The batch size for the DataLoader.
-        lr : float, default=1e-2
-            The learning rate for the optimizer.
+        lr : float, default=1e-4
+            The first learning rate for the optimizer.
         device : torch.device, default=torch.device("cpu")
             The device on which to perform the training.
 
@@ -117,8 +104,8 @@ class DBDPSolver:
         tuple[np.ndarray, np.ndarray]
             A tuple containing two arrays: the training losses and the testing losses
         """
-        trains_losses = np.zeros((self._time_steps, num_epochs))
-        tests_losses = np.zeros((self._time_steps, num_epochs))
+        trains_losses = np.zeros((self._time_steps, n_epochs_1))
+        tests_losses = np.zeros((self._time_steps, n_epochs_1))
 
         # Theses are small enough to fit in GPU's memory, so we can move them to the target device.
         datas = datas.to(device)
@@ -137,6 +124,12 @@ class DBDPSolver:
             # to achieve is rather small after the first resolution step.
             if time_idx < self._time_steps - 1:
                 self._network[time_idx].load_state_dict(self._network[time_idx + 1].state_dict())
+                n_epochs = n_epochs_2
+            else:
+                n_epochs = n_epochs_1
+
+            if time_idx == 0:
+                break
 
             # Training one time step
             train_losses, test_losses = self._train_time_step(
@@ -144,15 +137,14 @@ class DBDPSolver:
                 times[time_idx],
                 datas,
                 dw,
-                num_epochs,
+                n_epochs,
                 batch_size,
                 lr,
             )
-            trains_losses[time_idx] = train_losses
-            tests_losses[time_idx] = test_losses
+            trains_losses[time_idx, :n_epochs] = train_losses
+            tests_losses[time_idx, :n_epochs] = test_losses
 
-            # Decrease the learning rate
-            lr = max(1e-5, lr * 3 / 4)
+            lr = max(1e-6, 0.5 * lr)
 
             # NOTE: For debug purposes, train only `step` time steps
             if step == self._time_steps - time_idx:
@@ -169,7 +161,7 @@ class DBDPSolver:
         t: torch.Tensor,
         datas: torch.Tensor,
         dw: torch.Tensor,
-        num_epochs: int,
+        n_epochs: int,
         batch_size: int,
         lr: float,
     ) -> tuple[np.ndarray, np.ndarray]:
@@ -184,7 +176,7 @@ class DBDPSolver:
             The tensor of state paths.
         dw : torch.Tensor
             The tensor of Brownian increments.
-        num_epochs : int
+        n_epochs : int
             The number of training epochs for this time step.
         batch_size : int
             The batch size for the DataLoader.
@@ -208,14 +200,15 @@ class DBDPSolver:
             raise ValueError(f"Mismatch in state dimension: expected {self._model.dim}, got {datas.shape[2]}.")
 
         network_elt = self._network[time_idx]
+
         optimizer = Adam(network_elt.parameters(), lr=lr)
         criterion = nn.MSELoss()
 
         train_loader, test_loader = self._create_data_loaders(time_idx, datas, dw, batch_size)
-        train_losses = np.zeros(num_epochs)
-        test_losses = np.zeros(num_epochs)
+        train_losses = np.zeros(n_epochs)
+        test_losses = np.zeros(n_epochs)
 
-        for epoch in range(num_epochs):
+        for epoch in range(n_epochs):
             # Training
             network_elt.train()
             running_train_loss = 0.0
